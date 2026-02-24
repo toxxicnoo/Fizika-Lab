@@ -11,8 +11,6 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 import io
 
-
-
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QPushButton, QFileDialog,
@@ -26,6 +24,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import sympy as sp
+
 
 # --- LOGIKA ZA MAJORIZACIJU (SLIKE 1 I 2) ---
 def majorize_value(val):
@@ -152,8 +151,22 @@ class PhysicsLabApp(QMainWindow):
         self.dark_theme_action.setCheckable(True)
         self.menu_bar.addAction(self.dark_theme_action)
 
+        # Kreiraj main container sa tabovima i footer-om
+        main_container = QWidget()
+        main_layout = QVBoxLayout(main_container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
         self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
+        main_layout.addWidget(self.tabs)
+
+        # Dodaj footer
+        self.footer = QLabel("Autor: Nikola Vojinović 3/7 | Predmet: Fizika | Profesorka: Jelena Tasić")
+        self.footer.setStyleSheet("QLabel { color: #333; font-size: 13px; font-weight: bold; padding: 10px; text-align: center; border-top: 2px solid #007acc; background-color: #f5f5f5; }")
+        self.footer.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(self.footer)
+
+        self.setCentralWidget(main_container)
 
         # Tabovi
         self.tab_data = QWidget()
@@ -735,12 +748,16 @@ class PhysicsLabApp(QMainWindow):
             plt.style.use('default')
             self.canvas.fig.set_facecolor('white')
             self.canvas.axes.set_facecolor('white')
+            # Update footer style for light theme
+            self.footer.setStyleSheet("QLabel { color: #333; font-size: 13px; font-weight: bold; padding: 10px; text-align: center; border-top: 2px solid #007acc; background-color: #f5f5f5; }")
         else:  # dark theme
             self.setStyleSheet(DARK_STYLE)
             # Update matplotlib style for dark theme
             plt.style.use('dark_background')
             self.canvas.fig.set_facecolor('#252526')
             self.canvas.axes.set_facecolor('#252526')
+            # Update footer style for dark theme
+            self.footer.setStyleSheet("QLabel { color: #e0e0e0; font-size: 13px; font-weight: bold; padding: 10px; text-align: center; border-top: 2px solid #007acc; background-color: #1e1e1e; }")
 
         # Redraw canvas if it has content
         self.canvas.draw()
@@ -976,8 +993,6 @@ class PhysicsLabApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setWindowIcon(QIcon("ikonica.ico"))
     win = PhysicsLabApp()
-    win.setWindowIcon(QIcon("ikonica.ico"))
     win.show()
     sys.exit(app.exec())
