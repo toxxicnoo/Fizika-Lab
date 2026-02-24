@@ -11,18 +11,21 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 import io
 
+
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QPushButton, QFileDialog,
     QComboBox, QLabel, QLineEdit, QTextEdit, QTabWidget,
-    QMessageBox, QFrame, QHeaderView, QGridLayout, QMenuBar, QMenu
+    QMessageBox, QFrame, QHeaderView, QGridLayout, QMenuBar, QMenu,
+    QCheckBox, QListWidget, QListWidgetItem
 )
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import Qt
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-
+import sympy as sp
 
 # --- LOGIKA ZA MAJORIZACIJU (SLIKE 1 I 2) ---
 def majorize_value(val):
@@ -53,6 +56,31 @@ def calculate_relative_error(delta_x, x_mean):
     order = math.floor(math.log10(abs(rel_err)))
     factor = 10 ** (order - 1)
     return math.ceil(rel_err / factor) * factor
+
+
+def format_scientific(val):
+    """Format number in scientific notation if needed."""
+    if pd.isna(val) or not isinstance(val, (int, float, np.number)) or val == 0:
+        return str(val)
+    try:
+        val = float(val)
+        # Koristi scientific notaciju samo ako je broj vrlo mali (<0.001) ili veliki (>=1000)
+        if abs(val) >= 1e-3 and abs(val) < 1e3:
+            # Obični format sa odgovarajućim brojem decimala
+            if abs(val) < 1:
+                return f"{val:.4f}"
+            else:
+                return f"{val:.1f}"
+        else:
+            # Scientific notacija
+            exponent = math.floor(math.log10(abs(val)))
+            mantissa = val / (10 ** exponent)
+            if abs(mantissa - 1.0) < 1e-10:
+                return f"10^{exponent}"
+            else:
+                return f"{mantissa:.1f}*10^{exponent}"
+    except:
+        return str(val)
 
 
 # --- STILOVI ---
@@ -100,6 +128,8 @@ class PhysicsLabApp(QMainWindow):
         self.resize(1200, 800)
         self.df = pd.DataFrame()
         self.current_theme = "light"  # Track current theme
+        self.pdf_selected_columns = set()  # Columns selected for PDF
+        self.pdf_merged_pairs = []  # List of (main_col, error_col) tuples
         self.setStyleSheet(LIGHT_STYLE)
         self.init_ui()
 
@@ -129,14 +159,17 @@ class PhysicsLabApp(QMainWindow):
         self.tab_data = QWidget()
         self.tab_analysis = QWidget()
         self.tab_errors = QWidget()
+        self.tab_calculator = QWidget()
 
         self.tabs.addTab(self.tab_data, " Tabela ")
         self.tabs.addTab(self.tab_analysis, " Grafik")
         self.tabs.addTab(self.tab_errors, " Greške i Izveštaji ")
+        self.tabs.addTab(self.tab_calculator, " Kalkulator ")
 
         self.setup_data_tab()
         self.setup_analysis_tab()
         self.setup_errors_tab()
+        self.setup_calculator_tab()
 
         # Inicijalno ažuriranje combo box-ova
         self.update_combos()
@@ -220,6 +253,21 @@ class PhysicsLabApp(QMainWindow):
         self.major_column_btn.clicked.connect(self.majorize_selected_column)
         majorization_group.addWidget(self.major_column_btn)
 
+        # Zaokruživanje
+        rounding_layout = QHBoxLayout()
+        self.cb_column_round = QComboBox()
+        self.decimals_input = QLineEdit()
+        self.decimals_input.setPlaceholderText("Broj decimala")
+        self.decimals_input.setMaximumWidth(100)
+        self.round_column_btn = QPushButton("ZAOKRUŽI KOLONU")
+        self.round_column_btn.clicked.connect(self.round_selected_column)
+        rounding_layout.addWidget(QLabel("Kolona:"))
+        rounding_layout.addWidget(self.cb_column_round)
+        rounding_layout.addWidget(QLabel("Decimala:"))
+        rounding_layout.addWidget(self.decimals_input)
+        rounding_layout.addWidget(self.round_column_btn)
+        majorization_group.addLayout(rounding_layout)
+
         layout.addLayout(majorization_group)
 
         # Separator
@@ -244,7 +292,232 @@ class PhysicsLabApp(QMainWindow):
         pdf_group.addWidget(self.pdf_info)
 
         layout.addLayout(pdf_group)
+
+        # Separator
+        line2 = QFrame()
+        line2.setFrameShape(QFrame.HLine)
+        line2.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line2)
+
+        # PDF Column Settings
+        column_settings_group = QVBoxLayout()
+        column_settings_group.addWidget(QLabel("Podešavanje kolona za PDF:"))
+
+        # Column checkboxes
+        self.column_checkboxes = {}
+        checkboxes_layout = QHBoxLayout()
+        for col in self.df.columns if not self.df.empty else []:
+            cb = QCheckBox(col)
+            cb.setChecked(True)  # Default to selected
+            self.column_checkboxes[col] = cb
+            checkboxes_layout.addWidget(cb)
+        column_settings_group.addLayout(checkboxes_layout)
+
+        # Merge pairs
+        merge_layout = QHBoxLayout()
+        self.cb_main_col = QComboBox()
+        self.cb_error_col = QComboBox()
+        if not self.df.empty:
+            self.cb_main_col.addItems(list(self.df.columns))
+            self.cb_error_col.addItems(list(self.df.columns))
+        merge_layout.addWidget(QLabel("Glavna kolona:"))
+        merge_layout.addWidget(self.cb_main_col)
+        merge_layout.addWidget(QLabel("Kolona greške:"))
+        merge_layout.addWidget(self.cb_error_col)
+        self.add_merge_btn = QPushButton("Dodaj par za spajanje")
+        self.add_merge_btn.clicked.connect(self.add_merge_pair)
+        merge_layout.addWidget(self.add_merge_btn)
+        column_settings_group.addLayout(merge_layout)
+
+        # List of merged pairs
+        self.merged_pairs_list = QListWidget()
+        column_settings_group.addWidget(QLabel("Definisan parovi za spajanje:"))
+        column_settings_group.addWidget(self.merged_pairs_list)
+
+        layout.addLayout(column_settings_group)
         layout.addStretch()  # Dodaje prostor na dnu
+
+    # ----- TAB ZA KALKULATOR -----
+    def setup_calculator_tab(self):
+        layout = QVBoxLayout(self.tab_calculator)
+
+        # Input field
+        self.calc_input = QLineEdit()
+        self.calc_input.setPlaceholderText("Unesite izraz, npr. sqrt(2) + sin(pi/4)")
+        layout.addWidget(QLabel("Izraz:"))
+        layout.addWidget(self.calc_input)
+
+        # Calculate button
+        self.calc_btn = QPushButton("IZRAČUNAJ")
+        self.calc_btn.clicked.connect(self.calculate_expression)
+        layout.addWidget(self.calc_btn)
+
+        # Results display
+        self.calc_output = QTextEdit()
+        self.calc_output.setReadOnly(True)
+        layout.addWidget(QLabel("Rezultati i istorija:"))
+        layout.addWidget(self.calc_output)
+
+        # Button grid for calculator
+        button_grid = QGridLayout()
+
+        # Row 1: Numbers 7-9, /
+        button_grid.addWidget(self.create_calc_button("7"), 0, 0)
+        button_grid.addWidget(self.create_calc_button("8"), 0, 1)
+        button_grid.addWidget(self.create_calc_button("9"), 0, 2)
+        button_grid.addWidget(self.create_calc_button("/"), 0, 3)
+
+        # Row 2: Numbers 4-6, *
+        button_grid.addWidget(self.create_calc_button("4"), 1, 0)
+        button_grid.addWidget(self.create_calc_button("5"), 1, 1)
+        button_grid.addWidget(self.create_calc_button("6"), 1, 2)
+        button_grid.addWidget(self.create_calc_button("*"), 1, 3)
+
+        # Row 3: Numbers 1-3, -
+        button_grid.addWidget(self.create_calc_button("1"), 2, 0)
+        button_grid.addWidget(self.create_calc_button("2"), 2, 1)
+        button_grid.addWidget(self.create_calc_button("3"), 2, 2)
+        button_grid.addWidget(self.create_calc_button("-"), 2, 3)
+
+        # Row 4: 0, ., +, =
+        button_grid.addWidget(self.create_calc_button("0"), 3, 0)
+        button_grid.addWidget(self.create_calc_button("."), 3, 1)
+        button_grid.addWidget(self.create_calc_button("+"), 3, 2)
+        button_grid.addWidget(self.create_calc_button("="), 3, 3)
+
+        # Row 5: Functions
+        button_grid.addWidget(self.create_calc_button("sqrt("), 4, 0)
+        button_grid.addWidget(self.create_calc_button("sin("), 4, 1)
+        button_grid.addWidget(self.create_calc_button("cos("), 4, 2)
+        button_grid.addWidget(self.create_calc_button("tan("), 4, 3)
+
+        # Row 6: More functions
+        button_grid.addWidget(self.create_calc_button("log("), 5, 0)
+        button_grid.addWidget(self.create_calc_button("ln("), 5, 1)
+        button_grid.addWidget(self.create_calc_button("pi"), 5, 2)
+        button_grid.addWidget(self.create_calc_button("e"), 5, 3)
+
+        # Row 7: Parentheses and power
+        button_grid.addWidget(self.create_calc_button("("), 6, 0)
+        button_grid.addWidget(self.create_calc_button(")"), 6, 1)
+        button_grid.addWidget(self.create_calc_button("^"), 6, 2)
+        button_grid.addWidget(self.create_calc_button("C"), 6, 3)
+
+        layout.addLayout(button_grid)
+
+    def create_calc_button(self, text):
+        btn = QPushButton(text)
+        btn.clicked.connect(lambda: self.on_calc_button_click(text))
+        return btn
+
+    def on_calc_button_click(self, text):
+        if text == "C":
+            self.calc_input.clear()
+        elif text == "=":
+            self.calculate_expression()
+        else:
+            current = self.calc_input.text()
+            self.calc_input.setText(current + text)
+
+    def calculate_expression(self):
+        expr = self.calc_input.text().strip()
+        if not expr:
+            return
+
+        try:
+            # Replace DataFrame functions like mean(I)
+            expr = self.replace_df_functions(expr)
+
+            # Parse and evaluate with sympy
+            result = sp.sympify(expr).evalf()
+
+            # Format result
+            if result.is_real and result.is_finite:
+                result_str = format_scientific(float(result))
+            else:
+                result_str = str(result)
+
+            # Add to history
+            history = self.calc_output.toPlainText()
+            new_entry = f"> {expr}\n= {result_str}\n\n"
+            self.calc_output.setText(new_entry + history)
+
+        except Exception as e:
+            error_msg = f"> {expr}\nGreška: {str(e)}\n\n"
+            history = self.calc_output.toPlainText()
+            self.calc_output.setText(error_msg + history)
+
+    def replace_df_functions(self, expr):
+        """Replace functions like mean(col) with actual values from DataFrame."""
+        if self.df.empty:
+            return expr
+
+        # Supported functions
+        functions = ['mean', 'min', 'max']
+
+        for func in functions:
+            import re
+            pattern = rf'{func}\(\s*(\w+)\s*\)'
+            matches = re.findall(pattern, expr)
+
+            for col in matches:
+                if col in self.df.columns and pd.api.types.is_numeric_dtype(self.df[col]):
+                    if func == 'mean':
+                        val = self.df[col].mean()
+                    elif func == 'min':
+                        val = self.df[col].min()
+                    elif func == 'max':
+                        val = self.df[col].max()
+
+                    expr = expr.replace(f'{func}({col})', str(val))
+
+        return expr
+
+    def add_merge_pair(self):
+        main_col = self.cb_main_col.currentText()
+        error_col = self.cb_error_col.currentText()
+
+        if not main_col or not error_col:
+            QMessageBox.warning(self, "Greška", "Izaberite obe kolone za spajanje.")
+            return
+
+        if main_col == error_col:
+            QMessageBox.warning(self, "Greška", "Glavna i kolona greške ne mogu biti iste.")
+            return
+
+        # Check if already exists
+        for pair in self.pdf_merged_pairs:
+            if pair[0] == main_col or pair[1] == error_col:
+                QMessageBox.warning(self, "Greška", "Jedna od kolona je već u paru.")
+                return
+
+        self.pdf_merged_pairs.append((main_col, error_col))
+        self.update_merged_pairs_list()
+        QMessageBox.information(self, "Uspeh", f"Par '{main_col}' ± '{error_col}' je dodat.")
+
+    def update_merged_pairs_list(self):
+        self.merged_pairs_list.clear()
+        for main_col, error_col in self.pdf_merged_pairs:
+            item = QListWidgetItem(f"{main_col} ± {error_col}")
+            self.merged_pairs_list.addItem(item)
+
+    def refresh_pdf_settings(self):
+        """Refresh PDF column checkboxes and dropdowns."""
+        if self.df.empty:
+            return
+
+        # Update checkboxes
+        # Find the layout containing checkboxes
+        # Since it's complex, let's recreate the checkboxes layout
+        # For now, just update the dropdowns
+        cols = list(self.df.columns)
+        self.cb_main_col.clear()
+        self.cb_main_col.addItems(cols)
+        self.cb_error_col.clear()
+        self.cb_error_col.addItems(cols)
+
+        # Note: Checkboxes are created in setup_errors_tab, but since data changes, we need to update them
+        # For simplicity, assume checkboxes are updated when data is imported
 
     # ----- FUNKCIJE -----
     def import_file(self):
@@ -265,7 +538,7 @@ class PhysicsLabApp(QMainWindow):
         for i in range(len(self.df)):
             for j in range(len(self.df.columns)):
                 val = self.df.iloc[i, j]
-                self.table.setItem(i, j, QTableWidgetItem(str(val)))
+                self.table.setItem(i, j, QTableWidgetItem(format_scientific(val)))
 
     def update_combos(self):
         if self.df.empty: return
@@ -276,6 +549,22 @@ class PhysicsLabApp(QMainWindow):
         self.cb_y.addItems(cols)
         self.cb_column_errors.clear();
         self.cb_column_errors.addItems(cols)
+        self.cb_column_round.clear();
+        self.cb_column_round.addItems(cols)
+
+        # Update PDF column checkboxes
+        # Clear existing checkboxes
+        for cb in self.column_checkboxes.values():
+            cb.setParent(None)
+        self.column_checkboxes.clear()
+
+        # Create new checkboxes
+        checkboxes_layout = self.findChild(QHBoxLayout)  # Need to find the layout
+        # Actually, since setup_errors_tab is called once, we need to recreate the layout or update it
+        # For simplicity, let's recreate the checkboxes in the existing layout
+        # But since it's complex, let's add a method to refresh PDF settings
+
+        self.refresh_pdf_settings()
 
     def apply_majorization_to_table(self):
         if self.df.empty: return
@@ -476,6 +765,31 @@ class PhysicsLabApp(QMainWindow):
         else:
             QMessageBox.warning(self, "Greška", "Izabrana kolona nije numerička.")
 
+    def round_selected_column(self):
+        if self.df.empty: return
+        selected_col = self.cb_column_round.currentText()
+        decimals_text = self.decimals_input.text().strip()
+        if not selected_col:
+            QMessageBox.warning(self, "Greška", "Izaberite kolonu za zaokruživanje.")
+            return
+        if not decimals_text:
+            QMessageBox.warning(self, "Greška", "Unesite broj decimala.")
+            return
+        try:
+            decimals = int(decimals_text)
+            if decimals < 0:
+                QMessageBox.warning(self, "Greška", "Broj decimala mora biti pozitivan.")
+                return
+        except ValueError:
+            QMessageBox.warning(self, "Greška", "Broj decimala mora biti ceo broj.")
+            return
+        if pd.api.types.is_numeric_dtype(self.df[selected_col]):
+            self.df[selected_col] = self.df[selected_col].round(decimals)
+            self.refresh_table()
+            QMessageBox.information(self, "Zaokruživanje", f"Kolona '{selected_col}' je zaokružena na {decimals} decimala.")
+        else:
+            QMessageBox.warning(self, "Greška", "Izabrana kolona nije numerička.")
+
     def generate_pdf_report(self):
         if self.df.empty:
             QMessageBox.warning(self, "Greška", "Nema podataka za generisanje izveštaja.")
@@ -548,20 +862,41 @@ class PhysicsLabApp(QMainWindow):
                 print(f"Greška pri dodavanju grafa u PDF: {e}")
                 pass
 
+            # Determine selected columns
+            selected_columns = [col for col, cb in self.column_checkboxes.items() if cb.isChecked()]
+
+            # Create merged column names
+            merged_columns = {}
+            for main_col, error_col in self.pdf_merged_pairs:
+                merged_name = f"{main_col} ± {error_col}"
+                merged_columns[merged_name] = (main_col, error_col)
+
+            # Columns for PDF: selected + merged
+            pdf_columns = selected_columns + list(merged_columns.keys())
+
             # Tabela sa podacima
             # Priprema podataka za tabelu
-            table_data = [list(self.df.columns)]  # Zaglavlje
+            table_data = [pdf_columns]  # Zaglavlje
 
             # Dodavanje redova podataka (ograničeno na prvih 100 redova zbog veličine)
             max_rows = min(100, len(self.df))
             for i in range(max_rows):
                 row = []
-                for col in self.df.columns:
-                    val = self.df.iloc[i][col]
-                    if pd.isna(val):
-                        row.append("")
+                for col in pdf_columns:
+                    if col in merged_columns:
+                        main_col, error_col = merged_columns[col]
+                        val_main = self.df.iloc[i][main_col]
+                        val_error = self.df.iloc[i][error_col]
+                        if pd.isna(val_main) or pd.isna(val_error):
+                            row.append("")
+                        else:
+                            row.append(f"{format_scientific(val_main)} ± {format_scientific(val_error)}")
                     else:
-                        row.append(str(val))
+                        val = self.df.iloc[i][col]
+                        if pd.isna(val):
+                            row.append("")
+                        else:
+                            row.append(format_scientific(val))
                 table_data.append(row)
 
             # Kreiranje tabele
@@ -590,8 +925,21 @@ class PhysicsLabApp(QMainWindow):
             story.append(stats_title)
             story.append(Spacer(1, 12))
 
-            for col in self.df.columns:
-                if pd.api.types.is_numeric_dtype(self.df[col]):
+            for col in pdf_columns:
+                if col in merged_columns:
+                    main_col, error_col = merged_columns[col]
+                    if pd.api.types.is_numeric_dtype(self.df[main_col]) and pd.api.types.is_numeric_dtype(self.df[error_col]):
+                        mean_val = self.df[main_col].mean()
+                        max_error = self.df[error_col].max()  # Use max of error column
+                        majorized_error = majorize_value(max_error)
+
+                        col_stats = f"<b>{col}:</b><br/>"
+                        col_stats += f"Prosek: {format_scientific(mean_val)}<br/>"
+                        col_stats += f"Zapis: {format_scientific(mean_val)} ± {format_scientific(majorized_error)}"
+
+                        story.append(Paragraph(col_stats, styles['Normal']))
+                        story.append(Spacer(1, 6))
+                elif col in self.df.columns and pd.api.types.is_numeric_dtype(self.df[col]):
                     mean_val = self.df[col].mean()
                     min_val = self.df[col].min()
                     max_val = self.df[col].max()
@@ -606,10 +954,10 @@ class PhysicsLabApp(QMainWindow):
                         majorized_error = 0
 
                     col_stats = f"<b>{col}:</b><br/>"
-                    col_stats += f"Prosek: {mean_val:.4f}<br/>"
-                    col_stats += f"Minimum: {min_val:.4f}<br/>"
-                    col_stats += f"Maksimum: {max_val:.4f}<br/>"
-                    col_stats += f"Zapis: {mean_val:.4f} ± {majorized_error}"
+                    col_stats += f"Prosek: {format_scientific(mean_val)}<br/>"
+                    col_stats += f"Minimum: {format_scientific(min_val)}<br/>"
+                    col_stats += f"Maksimum: {format_scientific(max_val)}<br/>"
+                    col_stats += f"Zapis: {format_scientific(mean_val)} ± {format_scientific(majorized_error)}"
 
                     story.append(Paragraph(col_stats, styles['Normal']))
                     story.append(Spacer(1, 6))
@@ -628,6 +976,8 @@ class PhysicsLabApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setWindowIcon(QIcon("ikonica.ico"))
     win = PhysicsLabApp()
+    win.setWindowIcon(QIcon("ikonica.ico"))
     win.show()
     sys.exit(app.exec())

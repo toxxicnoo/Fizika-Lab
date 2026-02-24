@@ -4,3 +4,4 @@ scipy
 reportlab
 PySide6
 matplotlib
+sympy
