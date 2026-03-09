@@ -58,26 +58,25 @@ def calculate_relative_error(delta_x, x_mean):
 
 
 def format_scientific(val):
-    """Format number in scientific notation if needed."""
+    """Format number in scientific notation if exponent >=2 or <=-2."""
     if pd.isna(val) or not isinstance(val, (int, float, np.number)) or val == 0:
         return str(val)
     try:
         val = float(val)
-        # Koristi scientific notaciju samo ako je broj vrlo mali (<0.001) ili veliki (>=1000)
-        if abs(val) >= 1e-3 and abs(val) < 1e3:
-            # Obični format sa odgovarajućim brojem decimala
-            if abs(val) < 1:
-                return f"{val:.4f}"
-            else:
-                return f"{val:.1f}"
-        else:
+        exponent = math.floor(math.log10(abs(val)))
+        if abs(exponent) >= 2:
             # Scientific notacija
-            exponent = math.floor(math.log10(abs(val)))
             mantissa = val / (10 ** exponent)
             if abs(mantissa - 1.0) < 1e-10:
                 return f"10^{exponent}"
             else:
                 return f"{mantissa:.1f}*10^{exponent}"
+        else:
+            # Obični format
+            if abs(val) < 1:
+                return f"{val:.4f}"
+            else:
+                return f"{val:.1f}"
     except:
         return str(val)
 
